@@ -1,0 +1,244 @@
+---
+title: 'New insights on social media metrics: examining the relationship between universities’ academic reputation and Wikipedia attention'
+author: 'Wenceslao Arroyo-Machado, Adrián A. Díaz-Faes, Rodrigo Costas'
+date: '30 April, 2022'
+output:
+  html_document:
+    theme: yeti
+    toc: false
+    toc_float: false
+---
+
+This is the [R Markdown](http://rmarkdown.rstudio.com) Notebook created for the STI conference paper titled 'New insights on social media metrics: examining the relationship between universities’ academic reputation and Wikipedia attentio'. Notebook and data are available at [GitHub](https://github.com/Wences91/wikipedia_universities).
+```{r settings, warning=FALSE, message=FALSE, echo=FALSE}
+set.seed(13)
+options(scipen=1000000)
+```
+
+
+```{r packages, warning=FALSE, message=FALSE}
+library(dplyr)
+require(ggrepel)
+library(corrplot)
+library(wesanderson)
+library(ggplot2)
+library(ggpubr)
+library(patchwork)
+```
+
+## Preprocessing
+
+The full data.frame of universities indicators and countries are imported. A minor preprocessing is necessary to incorporate geographic information into the data.
+```{r read_data}
+wiki_univ <- read.delim('results/wiki_univ.tsv', check.names = FALSE)
+name_countries <- read.delim('data/countries.tsv')
+continents <- read.delim('data/continents.tsv', check.names = FALSE)
+```
+
+Three data.frame are merged.
+```{r merge_df}
+wiki_univ <- inner_join(wiki_univ,
+                        name_countries[,c('country_iso_num_code',
+                                          'univ_name',
+                                          'iso_name',
+                                          'country_iso_alpha3_code')],
+                        by='country_iso_num_code')
+
+wiki_univ <- left_join(wiki_univ,
+                       continents[,c('ISO-alpha3 Code',
+                                     'Continent')],
+                       by=c('country_iso_alpha3_code'='ISO-alpha3 Code'))
+```
+
+Most of the universities are from Asia.
+```{r continent_info}
+as.data.frame(table(wiki_univ$Continent))
+```
+
+Continent information is transformed into a categorical variable.
+```{r contintent_cat}
+wiki_univ$Continent <- as.integer(as.factor(wiki_univ$Continent))
+```
+
+A new data.frame is created with the with the frequency of universities per country.
+```{r country_list}
+countries <- as.data.frame(table(wiki_univ$univ_name),
+                           stringsAsFactors = FALSE)
+
+names(countries) <- c('country', 'universities')
+countries <- countries[order(countries$universities, decreasing = TRUE),]
+```
+
+China and United States are the countries with the highest number of universities in the Leiden Ranking.
+```{r top_countries}
+head(countries, 10)
+```
+
+Since we want to differentiate between all universities and only those of the core Anglo-Saxon countries, we create a new variable (dummy).
+```{r anglo_variable}
+wiki_univ$anglo <- 0
+wiki_univ$anglo[which(wiki_univ$univ_name %in% c('United States', 'United Kingdom', 'Canada', 'Australia', 'New Zealand', 'Ireland'))] <- 1
+```
+
+There are 336 Anglo-Saxon universities (38.23%).
+```{r anglo_freq}
+table(wiki_univ$anglo)
+```
+
+As there are a lot of columns in the Wikipedia universities data.frame, we identify the most relevant for the analysis.
+```{r varaibles_selection}
+variables <- c(
+  'publications'
+  ,'top_pubs'
+  ,'pp_top'
+  ,'collaboration'
+  ,'oa'
+  ,'univ_age'
+  ,'len'
+  ,'page_edits'
+  ,'views'
+  ,'langlinks'
+  ,'page_age'
+)
+```
+
+We created a new data.frame with the average value of indicators by country. Only countries with more than 10 universities are considered.
+```{r country_summary_creation, message=FALSE, warning=FALSE}
+df_group <- wiki_univ
+df_group[which(df_group$univ_name %in% countries$country[which(countries$universities <= 10)]), c('univ_name')] <- ''
+df_group$universities <- 1
+df_group <- df_group[,c('univ_name', 'universities', variables)] %>%
+  group_by(univ_name) %>%
+  summarise(across(variables, mean, na.rm=TRUE), universities=sum(universities))
+```
+
+```{r country_summary}
+df_group[order(df_group$universities, decreasing = TRUE),]
+```
+
+As can be seen, Anglo-Saxon universities cath more page views.
+```{r universities_pub_view, fig.align='center'}
+ggplot(data=df_group[which(df_group$univ_name!=''),], aes(x=top_pubs, y=views, color=langlinks, size=universities))+
+  geom_point()+
+  geom_text_repel(aes(label = univ_name),
+                  size = 3.5,  min.segment.length = 0) +
+  scale_color_gradientn(colors=wes_palette('Zissou1'))+
+  labs(x='Avg. top publications', y='Avg. page views', color='Langlinks', size='Universities')+
+  theme_classic()+
+  theme(legend.position = 'bottom')+
+  guides(colour=guide_colourbar(title.vjust = 0.8))
+```
+
+## Correlations
+
+Spearman's correlations are calculated using all universities.
+```{r general_correlations}
+variables_ren <- c(
+  'Publications'
+  ,'Top publications'
+  ,'% Top publications'
+  ,'Collaboration'
+  ,'Open Access'
+  ,'University age'
+  ,'Page length'
+  ,'Page edits'
+  ,'Page views'
+  ,'Page languages'
+  ,'Page age'
+)
+
+wiki_univ_cor <- wiki_univ[, variables]
+names(wiki_univ_cor) <- variables_ren
+
+#png('figures/correlations_general.png', width = 800, height = 800, res=150)
+corrplot(cor(wiki_univ_cor, use = 'complete.obs', method='spearman'), method='color', col=wes_palette('Zissou1', 10, type = 'continuous'),  
+         type='lower',
+         is.corr = FALSE, col.lim = c(0,1),
+         addCoef.col = 'black', 
+         tl.col='black', tl.srt=45,
+         diag=T, number.cex = 0.6, tl.cex = 0.75
+)
+```
+
+Spearman's correlations are calculated using only Anglo-Saxon universities.
+```{r anglo_correlations}
+wiki_univ_cor <- wiki_univ[which(wiki_univ$anglo==1), variables]
+names(wiki_univ_cor) <- variables_ren
+
+#png('figures/correlations_anglo.png', width = 800, height = 800, res=150)
+corrplot(cor(wiki_univ_cor, use = 'complete.obs', method='spearman'), method='color', col=wes_palette('Zissou1', 10, type = 'continuous'),  
+         type='lower',
+         is.corr = FALSE, col.lim = c(0,1),
+         addCoef.col = 'black', 
+         tl.col='black', tl.srt=45,
+         diag=T, number.cex = 0.6, tl.cex = 0.75
+)
+```
+
+
+## Scatter and density plot
+
+When looking at the relationship between page views and top publications we find two different phenomena that have to do with the language of the university's country.
+```{r density_plot, warning=FALSE, fig.align='center'}
+wiki_univ$anglo <- factor(wiki_univ$anglo, levels=c(0,1), labels=c('Non-Anglo-Saxon', 'Anglo-Saxon'))
+
+ggplot(data=wiki_univ, aes(x=top_pubs, y=views, color=anglo))+
+  stat_density_2d(aes(alpha = ..piece..))+
+  scale_x_log10()+
+  scale_y_log10()+
+  labs(x='Top publications', y='Page views', color='Country', fill='Country', alpha='Density')+
+  scale_fill_manual(values = wes_palette(name = 'Zissou1')[c(1,5)])+
+  scale_color_manual(values = wes_palette(name = 'Zissou1')[c(1,5)])+
+  theme_classic()+
+  theme(legend.position = 'right',
+        legend.direction = 'vertical',
+        text=element_text(family='Arial', size=14, color='black'),
+        axis.text=element_text(color='black', size=12),
+        axis.ticks=element_line(color='black'),
+        legend.text = element_text(size=11))+
+  guides(color = guide_legend(override.aes = aes(label = '', size = 4)))
+```
+
+It is clear how universities from Anglo-Saxon countries get more page views as well as they have more top publication but not by such a large difference.
+```{r scatter_density_plot, warning=FALSE, fig.align='center'}
+plot_1 <- ggplot(data=wiki_univ, aes(x=top_pubs, y=views, fill=anglo))+
+  geom_point(size=2.5, alpha=.6, shape=21, stroke=0)+
+  geom_text_repel(aes(label = university,
+                      color=anglo),
+                  size = 3.5, min.segment.length = 0, segment.alpha=.6) +
+  
+  labs(x='Top publications', y='Page views', color='Country', fill='Country')+
+  scale_fill_manual(values = wes_palette(name = 'Zissou1')[c(1,5)])+
+  scale_color_manual(values = wes_palette(name = 'Zissou1')[c(1,5)])+
+  scale_x_log10()+
+  scale_y_log10()+
+  theme_classic()+
+  theme(legend.position = 'bottom',
+        text=element_text(family='Arial', size=14, color='black'),
+        axis.text=element_text(color='black', size=12),
+        axis.ticks=element_line(color='black'),
+        legend.text = element_text(size=11.5))+
+  guides(color = guide_legend(override.aes = aes(label = '', size = 4)))
+
+
+
+ dens_1 <- ggplot(data=wiki_univ, aes(x=top_pubs, fill=anglo)) + 
+  geom_density(alpha = 0.4) + 
+   scale_x_log10()+
+  scale_fill_manual(values = wes_palette(name = 'Zissou1')[c(1,5)]) +
+  theme_void() + 
+  theme(legend.position = "none")
+
+ dens_2 <- ggplot(data=wiki_univ, aes(x=views, fill=anglo)) + 
+   geom_density(alpha = 0.4) + 
+  scale_x_log10()+
+   scale_fill_manual(values = wes_palette(name = 'Zissou1')[c(1,5)])+
+   theme_void() + 
+   theme(legend.position = "none") + 
+   coord_flip() 
+
+ 
+ dens_1 + plot_spacer() + plot_1 + dens_2 + 
+   plot_layout(ncol = 2, nrow = 2, widths = c(8, 1), heights = c(1, 7))
+ #ggsave('figures/scatterplot_density.png', width=11, height=6.5, dpi=300)
+```
